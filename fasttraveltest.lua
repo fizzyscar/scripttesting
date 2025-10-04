@@ -20,6 +20,7 @@ local mapMoveSpeed = JSON.parse(config.mapMoveSpeeds)
 local baseUrl = 'http://' .. ac.getServerIP() .. ':' .. ac.getServerPortHTTP() .. '/fasttravel/'
 
 local supportAPI_physics = physics.setGentleStop ~= nil
+local supportAPI_collision = physics.disableCarCollisions ~= nil
 local supportAPI_matrix = ac.getPatchVersionCode() >= 3037
 local trackCompassOffset = 24 -- for SRP
 
@@ -89,6 +90,7 @@ local lastPos = vec3()
 local lastMp = vec2()
 local lastCameraMode = 0
 local lastPlayersPos = {}
+local disabledCollision = false
 local teleportEstimate = 0
 local teleportAvailable = false
 local map_opacity = 0
@@ -107,6 +109,20 @@ local function ease_in_out(estimate, start, change, duration)
     estimate = estimate - 1
     return -change / 2.0 * (estimate * (estimate - 2) - 1) + start
 end
+
+local disabledCollisionEvent = ac.OnlineEvent({
+        ac.StructItem.key('disabledCollisionEvent'),
+        disabled = ac.StructItem.boolean()
+    },
+    function(sender, data)
+        if sender == nil then return end
+        if sender.index == 0 then return end
+        if supportAPI_collision then
+            ac.log(string.format('%s collision: [%d]%s', (data.disabled and 'disabled' or 'enabled'), sender.index, ac.getDriverName(sender.index)))
+            physics.disableCarCollisions(sender.index, data.disabled)
+            physics.disableCarCollisions(0, data.disabled)
+        end
+    end)
 
 ---@param mat mat4x4
 ---@param pos vec3
@@ -233,7 +249,7 @@ function script.drawUI(dt)
                 local carState = ac.getCar(i)
                 if carState.isActive and not ac.getCar(i).isHidingLabels then
                     local screenPos = projectPoint(carState.position)
-                    if 0 < screenPos.x and screenPos.x < 1 and 0 < screenPos.y a	nd screenPos.y < 1 then
+                    if 0 < screenPos.x and screenPos.x < 1 and 0 < screenPos.y and screenPos.y < 1 then
                         screenPos = screenPos * screenSize
                         if mp > screenPos - vec2(30, 30) and mp < screenPos + vec2(30, 30) and hoverCID == -1 and hoverMark == -1 then
                             hoverMark = -1
@@ -333,6 +349,13 @@ function script.update(dt)
             mapCamera.ownShare = mapCameraOwn
         end
     end
+    if mapMode then
+        if supportAPI_collision then physics.disableCarCollisions(0, false) end
+        if supportAPI_physics then physics.setGentleStop(0, true) end
+        if not disabledCollision then
+            disabledCollisionEvent({ disabled = true })
+            disabledCollision = true
+        end
         teleportEstimate = 0
     elseif mapCamera and mapCamera.ownShare > 0 then
         ac.setCurrentCamera(lastCameraMode)
@@ -341,7 +364,7 @@ function script.update(dt)
     if teleportEstimate > 1 then
         if supportAPI_physics then physics.setGentleStop(0, false) end
     end
-    if teleportEstimate > 5 then
+    if disabledCollision and teleportEstimate > 5 then
         local closer = false
         for i = 1, sim.carsCount - 1 do
             local carState = ac.getCar(i)
@@ -350,6 +373,13 @@ function script.update(dt)
                 closer = true
                 teleportEstimate = teleportEstimate - 1
                 break
+            end
+        end
+        if not closer then
+            if supportAPI_collision then physics.disableCarCollisions(0, false) end
+            if disabledCollision then
+                disabledCollisionEvent({ disabled = false })
+                disabledCollision = false
             end
         end
     end
